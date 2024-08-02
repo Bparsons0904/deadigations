@@ -6,6 +6,7 @@ import (
 	"os"
 	"sort"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/go-gormigrate/gormigrate/v2"
@@ -13,38 +14,64 @@ import (
 	"gorm.io/gorm"
 )
 
-type MigrationTool struct {
-	db                   *gorm.DB
-	registeredMigrations []*gormigrate.Migration
-	options              *gormigrate.Options
+type Migration struct {
+	ID          string
+	Description string
+	Migrate     func(tx *gorm.DB) error
+	Rollback    func(tx *gorm.DB) error
 }
 
-func NewMigrationTool(dsn string, registeredMigrations []*gormigrate.Migration, args []string) {
-	db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
-	if err != nil {
-		log.Fatalf("Failed to connect to the database: %v", err)
-	}
+var (
+	once                 sync.Once
+	instance             *MigrationTool
+	registeredMigrations []*gormigrate.Migration
+)
 
-	migrationTool := &MigrationTool{
-		db:                   db,
-		registeredMigrations: registeredMigrations,
-		options: &gormigrate.Options{
-			TableName:                 "migrations",
-			IDColumnName:              "id",
-			IDColumnSize:              255,
-			UseTransaction:            true,
-			ValidateUnknownMigrations: false,
-		},
+func RegisterMigration(migration Migration) {
+	gormMigration := &gormigrate.Migration{
+		ID:       migration.ID,
+		Migrate:  migration.Migrate,
+		Rollback: migration.Rollback,
 	}
+	registeredMigrations = append(registeredMigrations, gormMigration)
+}
 
+type MigrationTool struct {
+	db      *gorm.DB
+	options *gormigrate.Options
+}
+
+func NewMigrationTool(dsn string) *MigrationTool {
+	once.Do(func() {
+		db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
+		if err != nil {
+			log.Fatalf("Failed to connect to the database: %v", err)
+		}
+
+		instance = &MigrationTool{
+			db: db,
+			options: &gormigrate.Options{
+				TableName:                 "migrations",
+				IDColumnName:              "id",
+				IDColumnSize:              255,
+				UseTransaction:            true,
+				ValidateUnknownMigrations: false,
+			},
+		}
+	})
+
+	return instance
+}
+
+func (m *MigrationTool) Run(args []string) {
 	if len(args) > 1 {
 		switch args[1] {
 		case "-up":
-			if err := migrationTool.MigrateUp(); err != nil {
+			if err := m.MigrateUp(); err != nil {
 				log.Fatalf("Migration failed: %v", err)
 			}
 		case "-down":
-			if err := migrationTool.MigrateDown(); err != nil {
+			if err := m.MigrateDown(); err != nil {
 				log.Fatalf("Rollback failed: %v", err)
 			}
 		case "-create":
@@ -52,7 +79,7 @@ func NewMigrationTool(dsn string, registeredMigrations []*gormigrate.Migration, 
 				log.Fatal("Please provide a name for the migration")
 			}
 			migrationName := args[2]
-			if err := migrationTool.CreateMigrationFile(migrationName); err != nil {
+			if err := m.CreateMigrationFile(migrationName); err != nil {
 				log.Fatalf("Failed to create migration file: %v", err)
 			}
 		default:
@@ -64,16 +91,16 @@ func NewMigrationTool(dsn string, registeredMigrations []*gormigrate.Migration, 
 }
 
 func (m *MigrationTool) MigrateUp() error {
-	if len(m.registeredMigrations) == 0 {
+	if len(registeredMigrations) == 0 {
 		log.Println("No migrations registered")
 		return nil
 	}
 
-	sort.SliceStable(m.registeredMigrations, func(i, j int) bool {
-		return m.registeredMigrations[i].ID < m.registeredMigrations[j].ID
+	sort.SliceStable(registeredMigrations, func(i, j int) bool {
+		return registeredMigrations[i].ID < registeredMigrations[j].ID
 	})
 
-	migrator := gormigrate.New(m.db, m.options, m.registeredMigrations)
+	migrator := gormigrate.New(m.db, m.options, registeredMigrations)
 
 	if err := migrator.Migrate(); err != nil {
 		return err
@@ -83,16 +110,16 @@ func (m *MigrationTool) MigrateUp() error {
 }
 
 func (m *MigrationTool) MigrateDown() error {
-	if len(m.registeredMigrations) == 0 {
+	if len(registeredMigrations) == 0 {
 		log.Println("No migrations registered")
 		return nil
 	}
 
-	sort.SliceStable(m.registeredMigrations, func(i, j int) bool {
-		return m.registeredMigrations[i].ID > m.registeredMigrations[j].ID
+	sort.SliceStable(registeredMigrations, func(i, j int) bool {
+		return registeredMigrations[i].ID > registeredMigrations[j].ID
 	})
 
-	migrator := gormigrate.New(m.db, m.options, m.registeredMigrations)
+	migrator := gormigrate.New(m.db, m.options, registeredMigrations)
 
 	if err := migrator.RollbackLast(); err != nil {
 		return err
@@ -119,11 +146,12 @@ func (m *MigrationTool) CreateMigrationFile(name string) error {
 	migrationTemplate := `package migrations
 
 import (
+	"github.com/Bparsons0904/deadigations"
 	"gorm.io/gorm"
 )
 
 func init() {
-	RegisterMigration(Migration{
+	deadigations.RegisterMigration(deadigations.Migration{
 		ID:          "%s",
 		Description: "Add description of changes",
 		Migrate: func(tx *gorm.DB) error {
