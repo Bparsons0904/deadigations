@@ -55,59 +55,15 @@ import (
 )
 
 func main() {
-    // Load environment configuration
-    config, err := config.LoadConfig()
-    if err != nil {
-        log.Fatal("Could not load environment variables:", err)
-    }
-
     // Define the Data Source Name (DSN) for PostgreSQL connection
-    dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s sslmode=disable",
-        config.DBHost, config.DBUser, config.DBPassword, config.DBName, config.DBPort)
+    dsn := fmt.Sprintf("host=%s user=%s password=%s dbname=%s port=%s",
+        <your_host>, <your_user>, <your_password>, <your_port> , <your_port)
 
     // Initialize the migration tool
     migrationTool := deadigations.NewMigrationTool(dsn)
 
     // Run the migration tool with command-line arguments
     migrationTool.Run(os.Args)
-}
-```
-
-#### Environment Configuration
-
-Ensure your config package loads the necessary environment variables for database connection:
-
-```go
-package config
-
-import (
-    "github.com/joho/godotenv"
-    "log"
-    "os"
-)
-
-type Config struct {
-    DBHost     string
-    DBUser     string
-    DBPassword string
-    DBName     string
-    DBPort     string
-}
-
-func LoadConfig() (*Config, error) {
-    if err := godotenv.Load(); err != nil {
-        log.Println("No .env file found")
-    }
-
-    config := &Config{
-        DBHost:     os.Getenv("DB_HOST"),
-        DBUser:     os.Getenv("DB_USER"),
-        DBPassword: os.Getenv("DB_PASSWORD"),
-        DBName:     os.Getenv("DB_NAME"),
-        DBPort:     os.Getenv("DB_PORT"),
-    }
-
-    return config, nil
 }
 ```
 
@@ -205,7 +161,3 @@ go run ./migrator/migrator.go -down
 
 - [Gormigrate](https://github.com/go-gormigrate/gormigrate)
 - [Gorm Migrations Documentation](https://gorm.io/docs/migration.html)
-
-```
-
-```
