@@ -4,7 +4,6 @@ import (
 	"fmt"
 	"log"
 	"os"
-	"sort"
 	"strings"
 	"sync"
 	"time"
@@ -41,6 +40,7 @@ type MigrationTool struct {
 	options *gormigrate.Options
 }
 
+// Ensures only a single instance of the tool is created.
 func NewMigrationTool(dsn string) *MigrationTool {
 	once.Do(func() {
 		db, err := gorm.Open(postgres.Open(dsn), &gorm.Config{})
@@ -82,11 +82,19 @@ func (m *MigrationTool) Run(args []string) {
 			if err := m.CreateMigrationFile(migrationName); err != nil {
 				log.Fatalf("Failed to create migration file: %v", err)
 			}
+		case "-create-tx":
+			if len(args) < 3 {
+				log.Fatal("Please provide a name for the transaction migration")
+			}
+			migrationName := args[2]
+			if err := m.CreateTransactionMigrationFile(migrationName); err != nil {
+				log.Fatalf("Failed to create transaction migration file: %v", err)
+			}
 		default:
-			log.Fatal("Invalid command. Use -up, -down, or -create")
+			log.Fatal("Invalid command. Use -up, -down, -create, or -create-tx")
 		}
 	} else {
-		log.Println("No command provided. Use -up, -down, or -create")
+		log.Println("No command provided. Use -up, -down, -create, or -create-tx")
 	}
 }
 
@@ -95,10 +103,6 @@ func (m *MigrationTool) MigrateUp() error {
 		log.Println("No migrations registered")
 		return nil
 	}
-
-	sort.SliceStable(registeredMigrations, func(i, j int) bool {
-		return registeredMigrations[i].ID < registeredMigrations[j].ID
-	})
 
 	migrator := gormigrate.New(m.db, m.options, registeredMigrations)
 
@@ -115,10 +119,6 @@ func (m *MigrationTool) MigrateDown() error {
 		return nil
 	}
 
-	sort.SliceStable(registeredMigrations, func(i, j int) bool {
-		return registeredMigrations[i].ID > registeredMigrations[j].ID
-	})
-
 	migrator := gormigrate.New(m.db, m.options, registeredMigrations)
 
 	if err := migrator.RollbackLast(); err != nil {
@@ -131,9 +131,9 @@ func (m *MigrationTool) MigrateDown() error {
 func (m *MigrationTool) CreateMigrationFile(name string) error {
 	timestamp := time.Now().Format("20060102150405") // YYYYMMDDHHMMSS
 	filename := fmt.Sprintf("%s_%s.go", timestamp, strings.Replace(name, " ", "_", -1))
-	filePath := fmt.Sprintf("./migrations/%s", filename)
+	filePath := fmt.Sprintf("./migrator/migrations/%s", filename)
 
-	if err := os.MkdirAll("./migrations", os.ModePerm); err != nil {
+	if err := os.MkdirAll("./migrator/migrations", os.ModePerm); err != nil {
 		return err
 	}
 
@@ -172,5 +172,82 @@ func init() {
 	}
 
 	log.Printf("Migration file created: %s", filePath)
+	return nil
+}
+
+func (m *MigrationTool) CreateTransactionMigrationFile(name string) error {
+	timestamp := time.Now().Format("20060102150405") // YYYYMMDDHHMMSS
+	filename := fmt.Sprintf("%s_%s.go", timestamp, strings.Replace(name, " ", "_", -1))
+	filePath := fmt.Sprintf("./migrator/migrations/%s", filename)
+
+	if err := os.MkdirAll("./migrator/migrations", os.ModePerm); err != nil {
+		return err
+	}
+
+	file, err := os.Create(filePath)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+
+	transactionMigrationTemplate := `package migrations
+
+import (
+	"github.com/Bparsons0904/deadigations"
+	"gorm.io/gorm"
+)
+
+func init() {
+	deadigations.RegisterMigration(deadigations.Migration{
+		ID:          "%s",
+		Description: "Add description of changes with transaction support",
+		Migrate: func(tx *gorm.DB) error {
+			// Begin transaction
+			err := tx.Transaction(func(tx *gorm.DB) error {
+				// Your first operation
+				if err := tx.Exec("/* first operation SQL */").Error; err != nil {
+					return err
+				}
+
+				// Your second operation
+				if err := tx.Exec("/* second operation SQL */").Error; err != nil {
+					return err
+				}
+
+				// Add more operations as needed
+
+				return nil // Commit transaction
+			})
+			return err
+		},
+		Rollback: func(tx *gorm.DB) error {
+			// Begin transaction
+			err := tx.Transaction(func(tx *gorm.DB) error {
+				// Your first rollback operation
+				if err := tx.Exec("/* first rollback SQL */").Error; err != nil {
+					return err
+				}
+
+				// Your second rollback operation
+				if err := tx.AutoMigrate(&Product{}); err != nil {
+					return err
+				}
+
+				// Add more rollback operations as needed
+
+				return nil // Commit rollback transaction
+			})
+			return err
+		},
+	})
+}`
+
+	transactionMigrationContent := fmt.Sprintf(transactionMigrationTemplate, timestamp)
+	_, err = file.WriteString(transactionMigrationContent)
+	if err != nil {
+		return err
+	}
+
+	log.Printf("Transaction migration file created: %s", filePath)
 	return nil
 }
